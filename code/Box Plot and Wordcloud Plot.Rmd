@@ -1,0 +1,186 @@
+---
+title: "The Smiths Boxplot and Wordcloud"
+author: "Andres Gonzalez"
+date: "2023-03-30"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(ggrepel)
+library(geniusr)
+library(tidytext)
+library(ggwordcloud)
+library(ggtext)
+library(showtext)
+```
+
+
+
+```{r}
+font_add(family = "bodoni", "/Users/andres/Library/Fonts/BodoniFLF-Bold.ttf", bold = "/Users/andres/Library/Fonts/BodoniFLF-BoldItalic.ttf",italic = "/Users/andres/Library/Fonts/BodoniFLF-Italic.ttf")
+font_add("Gotham", "/Users/andres/Library/Fonts/GothamMedium.ttf")
+
+showtext_opts(dpi = 300)
+showtext_auto()
+
+columns <- c("danceability",
+             "energy",
+             "acousticness",
+             "instrumentalness")
+
+# Function to identify outliers
+find_outlier <- function(x) {
+  return(x < quantile(x, .25) - 1.5*IQR(x) | x > quantile(x, .75) + 1.5*IQR(x))
+}
+
+
+smiths_filtered %>%
+  pivot_longer(cols = all_of(columns), names_to = "features", values_to = "count") %>%
+  group_by(features) %>%
+  mutate(outlier = ifelse(features == "acousticness" & find_outlier(count), track_name, NA)) %>%
+  ggplot(aes(x = features, y = count, fill = features)) +
+  geom_boxplot(show.legend = FALSE, color = "black") +
+  geom_text_repel(aes(label = outlier), color = "black", size = 3, nudge_y = 0.1, box.padding = 0.5) +
+  labs(
+    title = "Distribution of Audio Feature Values <span style= 'font-size:24pt; font-family:bodoni; color:#EE2E34;'>THE SMITHS</span> Songs",
+    x = "Audio Features"
+  ) +
+  scale_x_discrete(labels = c("Acousticness", "Danceability", "Energy", "Instrumentalness")) +
+  scale_y_continuous(limits = c(0,1), breaks = seq(0,1, by = 0.2)) +
+  scale_fill_paletteer_d("ggthemes::gdoc") +
+  theme_minimal() +
+  theme(
+    text = element_text(family = "lato"),
+    plot.title = element_markdown(size = 18, face = "bold"),
+    plot.title.position = "plot",
+    axis.title.y = element_blank()
+  )
+
+ggsave("The Smiths Boxplot.png", width = 10, height = 6, bg = "white")
+```
+
+```{r}
+genius_token()
+```
+
+```{r}
+search_artist("The Smiths") 
+songs <- get_artist_songs_df(16669) 
+# Get all song IDs
+ids <- c(as.character(songs$song_id))
+# Create empty dataframe to house them
+allLyrics <- data.frame()
+
+while (length(ids) > 0) {
+  for (id in ids) {
+    tryCatch({
+      allLyrics <- rbind(get_lyrics_id(id), allLyrics)
+      successful <- unique(allLyrics$song_id)
+      ids <- ids[!ids %in% successful]
+      print(paste("done - ", id))
+      print(paste("New length is ", length(ids)))
+    }, error = function(e){})
+  }
+}
+
+allIds <- data.frame(song_id = unique(allLyrics$song_id))
+allIds$album <- ""
+
+for (song in allIds$song_id) {
+  allIds[match(song,allIds$song_id),2] <- get_song_df(song)[12]
+  print(allIds[match(song,allIds$song_id),])
+}
+
+allLyrics <- full_join(allIds, allLyrics)
+```
+
+```{r}
+head(allIds)
+allIds$album[is.na(allIds$album)] <- "Single Only"
+head(allIds)
+allLyrics2 <- full_join(allLyrics, allIds)
+```
+
+```{r}
+write.csv(allLyrics2, "The Smiths Lyrics.csv", row.names=FALSE)
+
+allLyrics2 <- read_csv("The Smiths Lyrics.csv")
+```
+
+```{r}
+smiths_lyrics <- allLyrics2 %>%
+  filter(album %in% c("The Smiths", "Meat Is Murder", "The Queen is Dead", "Strangeways, Here We Come"))
+
+# Tokenize the text data and store it in a tidy format
+tidy_data <- smiths_lyrics %>%
+  unnest_tokens(word, line) %>%
+  anti_join(stop_words) %>%
+  group_by(album, word) %>%
+  count() %>%
+  inner_join(get_sentiments()) %>%
+  group_by(word) %>%
+  filter(n_distinct(album) != 4) %>%
+  group_by(album) %>%
+  mutate(n = scales::rescale(n),
+         album = factor(album, levels = c("The Smiths", "Meat Is Murder", "The Queen is Dead", "Strangeways, Here We Come"))) %>%
+  arrange(-n)
+
+ggplot(tidy_data,
+       aes(
+         label = word,
+         size = n,
+         color = sentiment,
+         alpha = n
+       )) +
+  geom_text_wordcloud_area(area_corr_power = 1) +
+  scale_size_area(max_size = 11) +
+  scale_color_manual(values = c("#f14c38ff", "#01b0f1ff")) +
+  scale_alpha(range = c(.5, 1)) +
+  theme_minimal() +
+  facet_wrap(~album, ncol = 2) +
+  theme(
+    plot.background = element_rect(fill = "#393536ff", color = NA),
+    strip.text = element_text(
+      family = "bodoni",
+      face = "italic",
+      size = 20,
+      color = "white"
+    ),
+    plot.margin = unit(rep(1, 4), "cm"),
+    panel.spacing = unit(.5, "cm"),
+    plot.title = element_text(
+      family = "bodoni",
+      size = 40,
+      color = "#B93769",
+      hjust = .5,
+      vjust = .5
+    ),
+    plot.subtitle = ggtext::element_markdown(
+      hjust = .5,
+      color = "white",
+      size = 14
+    ),
+    plot.caption = ggtext::element_markdown(
+      family = "bodoni",
+      face = "bold",
+      hjust = .5,
+      vjust = .5,
+      color = "white",
+      size = 10
+    )
+  ) +
+  labs(title = "THE SMITHS",
+       subtitle = "(<span style='color:#01b0f1ff'>Positive</span> and <span style='color:#f14c38ff'>Negative</span>)<br><br>",
+       caption = "<br>Data from <b>{Geniusr}</b><br>Visualisation by <b>Andres Gonzalez</b> (Twitter @AndresAnalytics)<br>Code found at <b>github.com/OKcomputer626</b>")
+
+```
+
+
+
